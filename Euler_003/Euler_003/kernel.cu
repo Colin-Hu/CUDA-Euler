@@ -7,33 +7,45 @@
 #include <math.h>
 
 //NVIDIA GTX 670 1024 threads/block, 2.1B blocks	
+#define THREADSPERBLOCK 1024
+
 
 cudaError_t isPrimeWithCuda(long long int *a, long int *primes, int sizearray, int numprimes);
 cudaError_t whichPrimeWithCuda(long long int *a, long int *primes, int sizearray, int numprimes);
-int findarraySize(int fibmaxval);
+
 long long int* filltestarray(long int largeprime);
 long int* addtolist(long int* oldlist, long long int newprime, int plength);
 
-__global__ void isPrimeKernel(long long int *a, long int *primes, int sizearray, int numprimes)
+__global__ void fillArrayKernel(long long int *a, int sizearray)
 {
 	int i = blockIdx.x;
 	int j = threadIdx.x;
-	long int idx = i*1024 + j;
+	long int idx = i * THREADSPERBLOCK + j;
 
 	if (idx < sizearray)
 	{
 		a[idx] = a[0] + idx;
-		for (int primeindx = 0; primeindx < numprimes; primeindx++)
+	}
+}
+__global__ void isPrimeKernel(long long int *a, long int *primes, int sizearray, int numprimes)
+{
+	int i = blockIdx.x;
+	int j = threadIdx.x;
+	int primeidx = blockIdx.y;
+	long int idx = i* THREADSPERBLOCK + j;
+
+	long long int value;
+
+	if (idx < sizearray)
+	{
+		value = a[idx];
+		if (value % primes[primeidx] == 0)
 		{
-			if (a[idx] % primes[primeindx] == 0)
-			{
-				a[idx] = 0;
-				return;
-			}
+			a[idx] = 0;
+			return;
 		}
 	}
 }
-
 __global__ void whichPrimeKernel(long long int *a, long int *primes, int sizearray, int numprimes)
 {
 	int i = blockIdx.x;
@@ -55,14 +67,13 @@ __global__ void whichPrimeKernel(long long int *a, long int *primes, int sizearr
 
 int main()
 {
-	int arraySize;
+	int sqrtnum;
 	double inputnum = 600851475143;
 	long long int inputint = 600851475143;
 
-	//arraySize = findarraySize(fibmaxval);
 	double squareroot = std::sqrt(inputnum);
-	arraySize = floor(squareroot);
-	printf("Sqrt %d %f\n", arraySize, squareroot); fflush(stdout);
+	sqrtnum = floor(squareroot);
+	printf("Sqrt %d %f\n", sqrtnum, squareroot); fflush(stdout);
 
 	long int *primelist;
 	primelist = (long int *)malloc(sizeof(long int));
@@ -73,7 +84,8 @@ int main()
 	long long int *testarray;
 
 	long int maxprime = primelist[plength-1];
-	while (maxprime < arraySize)
+	bool done = false;
+	while (!done)
 	{
 		int arraylength = maxprime * (maxprime - 1);
 		printf("Arraylength: %d maxprime %d %d\n", arraylength, maxprime, primelist[plength-1]); fflush(stdout);
@@ -81,6 +93,15 @@ int main()
 
 		printf("Array: %d\n", testarray[0]); fflush(stdout);
 
+		//Reduces computations to minimal needed, since square arrays get big fast
+		if ((maxprime * maxprime) > sqrtnum)
+		{
+			arraylength = (sqrtnum - maxprime);
+			done = true;
+			printf("All done here %d %d\n", maxprime, sqrtnum); fflush(stdout);
+		}
+
+		printf("Calling isPrime: %d %d %d\n", arraylength, plength, sqrtnum); fflush(stdout);
 		cudaError_t cudaStatus = isPrimeWithCuda(testarray, primelist, arraylength, plength);
 		if (cudaStatus != cudaSuccess) {
 			fprintf(stderr, "addWithCuda failed!");
@@ -122,36 +143,6 @@ int main()
 	}
 	printf("Biggest prime %d", biggest);
 	free(testarray);
-	//printf("testarray %d %d\n",testarray[0],testarray[1]);
-	//cudaError_t cudaStatus = findMultipleWithCuda(a, arraySize);
-	//if (cudaStatus != cudaSuccess) {
-	//	fprintf(stderr, "addWithCuda failed!");
-	//	return 1;
-	//}
-
-	//printf("Post {%d,%d,%d,%d,%d}\n",
-	//	a[0], a[1], a[2], a[3], a[4]); fflush(stdout);
-
-	//int result = 0;
-	////	for (auto& num : a)
-	//for (int i = 0; i < arraySize; i++)
-	//{
-	//	if (a[i] != 0)
-	//	{
-	//		result = a[i];
-	//	}
-	//}
-
-	//printf("Result %d", result);
-
-	// cudaDeviceReset must be called before exiting in order for profiling and
-	// tracing tools such as Nsight and Visual Profiler to show complete traces.
-	//cudaStatus = cudaDeviceReset();
-	//if (cudaStatus != cudaSuccess) {
-	//	fprintf(stderr, "cudaDeviceReset failed!");
-	//	return 1;
-	//}
-
 	return 0;
 }
 
@@ -171,24 +162,6 @@ long int* addtolist(long int* oldlist, long long int newprime, int plength)
 	oldlist = (long int *)realloc(oldlist, sizeof(long int)*(plength+1));
 	oldlist[plength] = newprime;
 	return oldlist;
-}
-
-int findarraySize(int fibmaxval)
-{
-	int indx = 2;
-	int prev1 = 2;
-	int prev2 = 1;
-	int currentval = 0;
-
-	while (currentval < fibmaxval)
-	{
-		indx += 1;
-		currentval = prev1 + prev2;
-		prev2 = prev1;
-		prev1 = currentval;
-		printf("%d,%d\n", indx, currentval);
-	}
-	return indx - 1;
 }
 
 // Helper function for using CUDA to add vectors in parallel.
@@ -228,12 +201,15 @@ cudaError_t isPrimeWithCuda(long long int *a, long int *primes, int sizearray, i
 		goto Error;
 	}
 
-	int numblocks = (sizearray / 1024)+1;
+	int numblocks = (sizearray / THREADSPERBLOCK)+1;
 	printf("Cuda blocks %d\n", numblocks); fflush(stdout);
 	printf("Sizearray %d numprimes %d\n", sizearray, numprimes); fflush(stdout);
 
+	// First fills the array since only the first index was initialized
+	fillArrayKernel << <numblocks, THREADSPERBLOCK >> >(dev_a, sizearray);
 	// Launch a kernel on the GPU with one thread for each element.
-	isPrimeKernel << <numblocks, 1024 >> >(dev_a, dev_primes, sizearray, numprimes);
+	const dim3 blockSize(numblocks, numprimes, 1);
+	isPrimeKernel << <blockSize, THREADSPERBLOCK >> >(dev_a, dev_primes, sizearray, numprimes);
 
 	// Check for any errors launching the kernel
 	cudaStatus = cudaGetLastError();
