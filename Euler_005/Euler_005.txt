@@ -1,0 +1,8 @@
+Literally too lazy to write a program for this problem
+
+Answer is product of primes along with greatest number of primes in a single value.
+
+2 * 3 * 2 * 5 * 7 * 2 * 3 * 11 * 13 * 2 * 17 * 19
+2^4 * 3^2 * 5 * 7 * 11 * 13 * 17 * 19
+
+If I had to write a program I might just create an arrays of 2^16 by 20 and check for divisibility with threads. This seems pretty inefficient, but I guess that's how the previous programs have been.
