@@ -129,7 +129,20 @@ int main()
 
 	//cudaStatus = sumWithmyCuda(products, numproducts);
 	//printf("Total: %d\n", myCuda_sum(products, numproducts));
-	int totalsum = myCuda_sum(products, numproducts);
+	//int totalsum = myCuda_sum(products, numproducts);
+
+	int *temparray;
+	temparray = (int *)malloc(sizeof(int)*5);
+	temparray[0] = 3;
+	temparray[1] = 5;
+	temparray[2] = 0;
+	temparray[3] = 0;
+	temparray[4] = 0;
+
+	//printf("Pre values: %d %d\n", temparray[3], temparray[4]);
+	//sortarray(temparray, 5);
+	//printf("Post values: %d %d\n", temparray[3], temparray[4]);
+	sortarray(products , numproducts);
 
 	return 0;
 }
