@@ -2,8 +2,10 @@
 #include "device_launch_parameters.h"
 #include <stdio.h>
 #include <math.h>
+#include <windows.h>
 
 #define LIBTHREADSPERBLOCK 1024
+#define TESTTHREADSPERBLOCK 1024
 
 __global__ void libcheckKernel(int *a, int size)
 {
@@ -80,7 +82,7 @@ __global__ void blocksortKernel(int *a, int size)
 {
 	int i = blockIdx.x;
 	int j = threadIdx.x;
-	int idx = i*LIBTHREADSPERBLOCK + j;
+	int idx = i*TESTTHREADSPERBLOCK + j;
 	__shared__ int swapped;
 	__shared__ int swapcount;
 	int temp;
@@ -135,13 +137,15 @@ __global__ void reverseMergeSortKernel(int *a, int size, int numblocks, int bloc
 	int iter2 = myblock2end;
 	int *outtemp = new int[outsize];
 
+	printf("MergeSortKernel: idx %d Blocksizes %d Block 1 range: %d %d %d %d Block 2 range: %d %d %d %d\n", idx, blocksize, myblock1start, myblock1end, a[myblock1start],a[myblock1end],myblock2start, myblock2end, a[myblock2start],a[myblock2end]);
+
 	for (int outiter = outsize-1; outiter >= 0; outiter--){
 		if (a[iter1] > a[iter2])
 		{
 			outtemp[outiter] = a[iter1];
 			iter1--;
 		}
-		else if (a[iter1] < a[iter2])
+		else if (a[iter1] <= a[iter2])
 		{
 			outtemp[outiter] = a[iter2];
 			iter2--;
@@ -154,17 +158,99 @@ __global__ void reverseMergeSortKernel(int *a, int size, int numblocks, int bloc
 	delete[] outtemp;
 }
 
+int reverseMergeSortCPU(int *a, int size, int numblocks, int blocksize, int iblock)
+{
+	int idx = iblock;
+	int myblock1start = blocksize*(idx * 2);
+	int myblock2start = blocksize*(idx * 2 + 1);
+	int myblock1end = blocksize*(idx * 2 + 1) - 1;
+	int myblock2end = blocksize*(idx * 2 + 2) - 1;
+	if (myblock2end + 1 > size){
+		myblock2end = size - 1;
+	}
+	if (myblock2start > size - 1){
+		return 0;
+	}
+	int outsize = myblock2end - myblock1start + 1;
+	int iter1 = myblock1end;
+	int iter2 = myblock2end;
+	int *outtemp;
+	outtemp = (int *)malloc(outsize * sizeof(int));
+
+	printf("MergeSortCPU: idx %d Blocksizes %d Block 1 range: %d %d Block 2 range: %d %d Total Size: %d\n", idx, blocksize, myblock1start, myblock1end, myblock2start, myblock2end,size); fflush(stdout);
+
+	for (int outiter = outsize - 1; outiter >= 0; outiter--){
+		//printf("Iterators %d %d %d\n", iter1, iter2, outiter); fflush(stdout);
+		//printf("Values %d %d\n", a[iter1], a[iter2]); fflush(stdout);
+		if (a[iter1] > a[iter2])
+		{
+			outtemp[outiter] = a[iter1];
+			iter1--;
+		}
+		else if (a[iter1] <= a[iter2])
+		{
+			outtemp[outiter] = a[iter2];
+			iter2--;
+		}
+		//printf("Value %d %d Iterators %d %d\n", outiter, outtemp[outiter], iter1, iter2); fflush(stdout);
+		//Sleep(1000);
+	}
+
+	for (int outiter = outsize - 1; outiter >= 0; outiter--){
+		a[myblock1start + outiter] = outtemp[outiter];
+	}
+	free(outtemp);
+
+	return 0;
+}
+
 int reverseMergeBlocks(int *dev_a, int size, int numblocks, int blocksize)
 {
 	cudaError_t cudaStatus;
 	//Input of blocks recursively calls self until max number of blocks
-	if (numblocks < 300){
-		return numblocks;
+	if (numblocks < 2){
+		return 0;
 	}
-	int outblocks = numblocks / 2;
-	reverseMergeSortKernel << < 3, 1 >> >(dev_a, size, numblocks, blocksize);
+	int outblocks = (numblocks + 1) / 2;
+
+	// Return non-finished and allow for CPU sorting due to inefficiency at large blocksize
+	if (blocksize < 10000){
+		printf("Calling reverse MergeSort: %d %d %d\n", numblocks, blocksize, outblocks); fflush(stdout);
+		reverseMergeSortKernel << < outblocks, 1 >> >(dev_a, size, numblocks, blocksize);
+	}
+	else{
+		return blocksize;
+	}
+
+	// Check for any errors launching the kernel
+	cudaStatus = cudaGetLastError();
+	if (cudaStatus != cudaSuccess) {
+		fprintf(stderr, "reverseMergeBlock: addKernel launch failed: %s\n", cudaGetErrorString(cudaStatus));
+	}
+
+	// cudaDeviceSynchronize waits for the kernel to finish, and returns
+	// any errors encountered during the launch.
+	cudaStatus = cudaDeviceSynchronize();
+	if (cudaStatus != cudaSuccess) {
+		fprintf(stderr, "reverseMergeBlock: cudaDeviceSynchronize returned error code %d after launching addKernel!\n", cudaStatus);
+	}
 
 	return reverseMergeBlocks(dev_a, size, outblocks, blocksize * 2);
+}
+
+int reverseMergeBlocksCPU(int *a, int size, int numblocks, int blocksize)
+{
+	if (numblocks < 2){
+		return 0;
+	}
+
+	int outblocks = (numblocks + 1) / 2;
+
+	for (int iblock = 0; iblock < outblocks; iblock++){
+		reverseMergeSortCPU(a, size, numblocks, blocksize, iblock);
+	}
+
+	return reverseMergeBlocksCPU(a, size, outblocks, blocksize * 2);
 }
 
 void test()
@@ -206,7 +292,7 @@ cudaError_t checkWithCudalib(int *a, int size)
 	// Check for any errors launching the kernel
 	cudaStatus = cudaGetLastError();
 	if (cudaStatus != cudaSuccess) {
-		fprintf(stderr, "addKernel launch failed: %s\n", cudaGetErrorString(cudaStatus));
+		fprintf(stderr, "Library checkwithcuda launch failed: %s\n", cudaGetErrorString(cudaStatus));
 		goto Error;
 	}
 
@@ -397,10 +483,12 @@ cudaError_t sortWithCudalib(int *a, int size)
 	}
 
 	// Launch a kernel on the GPU with one thread for each element.
-	printf("Block Size %d\n", size); fflush(stdout);
-	int numBlocks = size / (2*LIBTHREADSPERBLOCK)+1;
-	blocksortKernel << < numBlocks, LIBTHREADSPERBLOCK >> >(dev_a, size);
-	reverseMergeBlocks(dev_a, size, numBlocks, LIBTHREADSPERBLOCK);
+	printf("Array Size %d\n", size); fflush(stdout);
+	int numBlocks = size / (2*TESTTHREADSPERBLOCK)+1;
+	printf("BubbleSort Blocks %d\n", numBlocks); fflush(stdout);
+	blocksortKernel << < numBlocks, TESTTHREADSPERBLOCK >> >(dev_a, size);
+	numBlocks = (size / TESTTHREADSPERBLOCK) + 1;
+	int needCPUsort = reverseMergeBlocks(dev_a, size, numBlocks, TESTTHREADSPERBLOCK);
 
 	// Check for any errors launching the kernel
 	cudaStatus = cudaGetLastError();
@@ -423,7 +511,12 @@ cudaError_t sortWithCudalib(int *a, int size)
 		fprintf(stderr, "sort: cudaMemcpy failed!");
 		goto Error;
 	}
-	printf("sort: final values %d %d\n", a[size-2], a[size-1]);
+
+	if (needCPUsort){
+		printf("Calling CPUsort %d\n",needCPUsort);
+		reverseMergeBlocksCPU(a, size, (size / (needCPUsort)) + 1, needCPUsort);
+	}
+	//printf("sort: final values %d %d\n", a[size-2], a[size-1]);
 
 Error:
 	cudaFree(dev_a);

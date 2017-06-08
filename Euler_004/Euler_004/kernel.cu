@@ -120,10 +120,10 @@ int main()
 		if (maxpalindrome < products[i])
 		{
 			maxpalindrome = products[i];
-			printf("Max palindrome %d\n", maxpalindrome);
+			printf("Max palindrome %d\n", maxpalindrome); fflush(stdout);
 		}
 	}
-	printf("Num palindrome %d\n", numpalindrome);
+	printf("Num palindrome %d\n", numpalindrome); fflush(stdout);
 
 	test();
 
@@ -143,6 +143,7 @@ int main()
 	//sortarray(temparray, 5);
 	//printf("Post values: %d %d\n", temparray[3], temparray[4]);
 	sortarray(products , numproducts);
+	printf("Post values: %d %d\n", products[numproducts-2], products[numproducts-1]);
 
 	return 0;
 }
